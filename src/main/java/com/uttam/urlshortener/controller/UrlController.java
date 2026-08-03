@@ -6,7 +6,7 @@ import com.uttam.urlshortener.dto.UrlResponse;
 import com.uttam.urlshortener.entity.UrlMapping;
 import com.uttam.urlshortener.service.UrlService;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,8 +17,16 @@ import java.net.URI;
 @RequestMapping("/api/v1/urls")
 public class UrlController {
 
-    @Autowired
-    private UrlService urlService;
+    private final UrlService urlService;
+    private final String baseUrl;
+
+    // Constructor injection — dependencies are explicit, testable, and immutable
+    // @Value injects the base URL from application.properties
+    public UrlController(UrlService urlService,
+                         @Value("${app.base-url}") String baseUrl) {
+        this.urlService = urlService;
+        this.baseUrl = baseUrl;
+    }
 
     @PostMapping("/shorten")
     public ResponseEntity<UrlResponse> shortenUrl(@Valid @RequestBody UrlRequest request) {
@@ -26,7 +34,7 @@ public class UrlController {
 
         UrlResponse response = new UrlResponse(
                 mapping.getOriginalUrl(),
-                "http://localhost:8080/" + mapping.getShortCode(),
+                baseUrl + "/" + mapping.getShortCode(),
                 mapping.getCreatedAt()
         );
 
