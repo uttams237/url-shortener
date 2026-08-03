@@ -1,8 +1,32 @@
-# Docker Compose for URL Shortener
-# Run: docker compose up -d
-# Starts PostgreSQL, Redis, Kafka, and Zookeeper for local development.
+# Docker Compose for URL Shortener — Full Stack
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose logs -f app        # Follow app logs
+#   docker compose down               # Stop everything
+#   docker compose down -v            # Stop + delete volumes (fresh start)
 
 services:
+  app:
+    build: .
+    container_name: url-shortener-app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/postgres
+      SPRING_DATASOURCE_USERNAME: uttamsharma
+      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
   postgres:
     image: postgres:16-alpine
     container_name: url-shortener-postgres
@@ -10,7 +34,6 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: uttamsharma
       POSTGRES_PASSWORD: password
-      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:
@@ -51,7 +74,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
