@@ -12,52 +12,62 @@ import java.util.Optional;
 public class UrlService {
 
     private final UrlRepository urlRepository;
+    private final RedisCacheService redisCacheService;
 
-    // Constructor injection (best practice over @Autowired field injection)
-    // - Makes dependencies explicit
-    // - Enables easier unit testing (pass mocks via constructor)
-    // - Spring auto-detects this as the injection point
-    public UrlService(UrlRepository urlRepository) {
+    public UrlService(UrlRepository urlRepository, RedisCacheService redisCacheService) {
         this.urlRepository = urlRepository;
+        this.redisCacheService = redisCacheService;
     }
 
     /**
      * Shortens a URL using Base62 encoding of the database-generated ID.
-     *
-     * Flow:
-     * 1. Check if URL was already shortened (idempotent — same URL = same short code)
-     * 2. If new: save to DB first (to get auto-generated ID)
-     * 3. Encode the ID using Base62 (e.g., ID 1000 → "g8")
-     * 4. Set the short code and save again
-     *
-     * Why two saves? We need the DB-generated ID to produce the Base62 code,
-     * and we can only get the ID after the first save (INSERT).
+     * Also caches the mapping in Redis for fast redirect lookups.
      */
     public UrlMapping shortenUrl(String originalUrl) {
-        // Idempotent: if we've already shortened this URL, return existing mapping
         return urlRepository.findByOriginalUrl(originalUrl)
                 .orElseGet(() -> {
-                    // First save: get the auto-generated ID from the database
                     UrlMapping mapping = new UrlMapping();
                     mapping.setOriginalUrl(originalUrl);
-                    mapping.setShortCode("temp"); // placeholder, will be replaced
+                    mapping.setShortCode("temp");
                     UrlMapping saved = urlRepository.save(mapping);
 
-                    // Encode the DB ID to Base62 for a short, deterministic code
                     saved.setShortCode(Base62Encoder.encode(saved.getId()));
-                    return urlRepository.save(saved);
+                    UrlMapping result = urlRepository.save(saved);
+
+                    // Cache in Redis on creation (write-through)
+                    redisCacheService.cacheUrl(result.getShortCode(), result.getOriginalUrl());
+
+                    return result;
                 });
     }
 
     /**
-     * Looks up the original URL by short code and increments click count.
+     * Looks up the original URL — Redis first, then DB fallback.
      *
-     * Note: Currently this does a synchronous DB write on every redirect.
-     * In Phase 3, we'll move this to Kafka for async processing.
+     * Read path:
+     * 1. Check Redis (sub-millisecond) → if HIT, return immediately
+     * 2. If MISS → query PostgreSQL → backfill Redis cache
+     * 3. Increment click count (synchronous for now, Kafka in Phase 3)
      */
     public Optional<UrlMapping> getOriginalUrl(String shortCode) {
+        // Step 1: Try Redis cache first
+        Optional<String> cachedUrl = redisCacheService.getCachedUrl(shortCode);
+        if (cachedUrl.isPresent()) {
+            // Cache HIT — still need the entity for click tracking
+            // In Phase 3, we'll fire a Kafka event instead of this DB call
+            return urlRepository.findByShortCode(shortCode)
+                    .map(mapping -> {
+                        mapping.setClickCount(mapping.getClickCount() + 1);
+                        return urlRepository.save(mapping);
+                    });
+        }
+
+        // Step 2: Cache MISS — query DB and backfill cache
         return urlRepository.findByShortCode(shortCode)
                 .map(mapping -> {
+                    // Backfill Redis cache for future lookups
+                    redisCacheService.cacheUrl(shortCode, mapping.getOriginalUrl());
+
                     mapping.setClickCount(mapping.getClickCount() + 1);
                     return urlRepository.save(mapping);
                 });
