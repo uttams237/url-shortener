@@ -19,7 +19,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  *
  * Key decisions:
  * 1. Stateless sessions (JWT-based, no server-side sessions)
- * 2. Public endpoints: register, login, shorten, redirect, analytics, Swagger
+ * 2. Public web & API endpoints: static UI, register, login, shorten, redirect, analytics, Swagger
  * 3. Protected endpoints: /api/v1/urls/my-urls (requires JWT)
  * 4. CSRF disabled (safe for stateless APIs — no cookies/sessions to hijack)
  */
@@ -40,14 +40,16 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints (no auth required)
+                        // Public Web UI & PWA assets
+                        .requestMatchers("/", "/index.html", "/manifest.json", "/sw.js", "/favicon.ico", "/*.png", "/*.jpg", "/*.css", "/*.js", "/static/**").permitAll()
+                        // Public REST API endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/urls/shorten").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/urls/analytics/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/urls/{shortCode}").permitAll()
                         // Swagger UI
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                        // Protected endpoints
+                        // Protected API endpoints
                         .requestMatchers("/api/v1/urls/my-urls").authenticated()
                         // Everything else requires auth
                         .anyRequest().authenticated()
