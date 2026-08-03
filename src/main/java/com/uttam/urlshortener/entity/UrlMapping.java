@@ -24,6 +24,11 @@ public class UrlMapping {
     @Column(nullable = false)
     private int clickCount = 0;
 
+    // Owner of this URL (nullable — anonymous users can create URLs too)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User owner;
+
     // Use this to initialize the timestamp automatically
     @PrePersist
     protected void onCreate() {

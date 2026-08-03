@@ -5,38 +5,48 @@ import com.uttam.urlshortener.entity.UrlMapping;
 import com.uttam.urlshortener.kafka.ClickEvent;
 import com.uttam.urlshortener.kafka.ClickEventProducer;
 import com.uttam.urlshortener.repository.UrlRepository;
+import com.uttam.urlshortener.repository.UserRepository;
 import com.uttam.urlshortener.util.Base62Encoder;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 
 @Service
 public class UrlService {
 
     private final UrlRepository urlRepository;
+    private final UserRepository userRepository;
     private final RedisCacheService redisCacheService;
     private final ClickEventProducer clickEventProducer;
 
     public UrlService(UrlRepository urlRepository,
+                      UserRepository userRepository,
                       RedisCacheService redisCacheService,
                       ClickEventProducer clickEventProducer) {
         this.urlRepository = urlRepository;
+        this.userRepository = userRepository;
         this.redisCacheService = redisCacheService;
         this.clickEventProducer = clickEventProducer;
     }
 
     /**
-     * Shortens a URL using Base62 encoding of the database-generated ID.
-     * Also caches the mapping in Redis for fast redirect lookups.
+     * Shortens a URL. If a username is provided, links the URL to that user.
      */
-    public UrlMapping shortenUrl(String originalUrl) {
+    public UrlMapping shortenUrl(String originalUrl, String username) {
         return urlRepository.findByOriginalUrl(originalUrl)
                 .orElseGet(() -> {
                     UrlMapping mapping = new UrlMapping();
                     mapping.setOriginalUrl(originalUrl);
                     mapping.setShortCode("temp");
-                    UrlMapping saved = urlRepository.save(mapping);
 
+                    // Link to user if authenticated
+                    if (username != null) {
+                        userRepository.findByUsername(username)
+                                .ifPresent(mapping::setOwner);
+                    }
+
+                    UrlMapping saved = urlRepository.save(mapping);
                     saved.setShortCode(Base62Encoder.encode(saved.getId()));
                     UrlMapping result = urlRepository.save(saved);
 
@@ -47,42 +57,25 @@ public class UrlService {
 
     /**
      * Looks up the original URL for redirect.
-     *
-     * THE KEY OPTIMIZATION (Phase 3):
-     * Before: Redis GET + DB READ + DB WRITE (click count) = slow
-     * After:  Redis GET + Kafka PRODUCE (fire-and-forget) = fast
-     *
-     * The redirect path now does:
-     * 1. Redis lookup (sub-millisecond)
-     * 2. Kafka publish (async, non-blocking)
-     * 3. Return the URL immediately
-     *
-     * Click counting happens asynchronously in ClickEventConsumer.
+     * Redis GET + Kafka fire-and-forget = fast redirect.
      */
     public Optional<String> getOriginalUrl(String shortCode, String userAgent, String ipAddress) {
-        // Step 1: Try Redis cache first
         Optional<String> cachedUrl = redisCacheService.getCachedUrl(shortCode);
         if (cachedUrl.isPresent()) {
-            // Cache HIT — publish click event to Kafka (async, no DB call!)
             clickEventProducer.publishClickEvent(ClickEvent.of(shortCode, userAgent, ipAddress));
             return cachedUrl;
         }
 
-        // Step 2: Cache MISS — query DB
-        Optional<String> dbUrl = urlRepository.findByShortCode(shortCode)
+        return urlRepository.findByShortCode(shortCode)
                 .map(mapping -> {
-                    // Backfill Redis cache
                     redisCacheService.cacheUrl(shortCode, mapping.getOriginalUrl());
-                    // Publish click event to Kafka
                     clickEventProducer.publishClickEvent(ClickEvent.of(shortCode, userAgent, ipAddress));
                     return mapping.getOriginalUrl();
                 });
-
-        return dbUrl;
     }
 
     /**
-     * Returns analytics (click count, creation time) for a short code.
+     * Returns analytics for a short code.
      */
     public Optional<UrlAnalyticsResponse> getUrlAnalytics(String shortCode) {
         return urlRepository.findByShortCode(shortCode)
@@ -92,5 +85,12 @@ public class UrlService {
                         mapping.getClickCount(),
                         mapping.getCreatedAt()
                 ));
+    }
+
+    /**
+     * Returns all URLs created by a specific user.
+     */
+    public List<UrlMapping> getUserUrls(String username) {
+        return urlRepository.findByOwnerUsername(username);
     }
 }

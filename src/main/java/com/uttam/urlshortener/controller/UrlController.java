@@ -10,9 +10,11 @@ import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/urls")
@@ -27,9 +29,17 @@ public class UrlController {
         this.baseUrl = baseUrl;
     }
 
+    /**
+     * Shorten a URL. Works for both anonymous and authenticated users.
+     * If authenticated, the URL is linked to the user's account.
+     */
     @PostMapping("/shorten")
-    public ResponseEntity<UrlResponse> shortenUrl(@Valid @RequestBody UrlRequest request) {
-        UrlMapping mapping = urlService.shortenUrl(request.originalUrl());
+    public ResponseEntity<UrlResponse> shortenUrl(@Valid @RequestBody UrlRequest request,
+                                                   Authentication authentication) {
+        // Get username if authenticated (null otherwise)
+        String username = authentication != null ? authentication.getName() : null;
+
+        UrlMapping mapping = urlService.shortenUrl(request.originalUrl(), username);
 
         UrlResponse response = new UrlResponse(
                 mapping.getOriginalUrl(),
@@ -40,12 +50,6 @@ public class UrlController {
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
-    /**
-     * Redirects to the original URL.
-     *
-     * Now passes User-Agent and IP to the service so Kafka click events
-     * include request metadata (useful for analytics dashboards later).
-     */
     @GetMapping("/{shortCode}")
     public ResponseEntity<?> redirectToOriginal(@PathVariable String shortCode,
                                                  HttpServletRequest request) {
@@ -64,5 +68,22 @@ public class UrlController {
         return urlService.getUrlAnalytics(shortCode)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * List all URLs created by the authenticated user.
+     * Requires JWT token in Authorization header.
+     */
+    @GetMapping("/my-urls")
+    public ResponseEntity<List<UrlResponse>> getMyUrls(Authentication authentication) {
+        String username = authentication.getName();
+        List<UrlResponse> urls = urlService.getUserUrls(username).stream()
+                .map(mapping -> new UrlResponse(
+                        mapping.getOriginalUrl(),
+                        baseUrl + "/" + mapping.getShortCode(),
+                        mapping.getCreatedAt()
+                ))
+                .toList();
+        return ResponseEntity.ok(urls);
     }
 }
